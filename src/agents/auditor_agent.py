@@ -24,12 +24,12 @@ class AuditorAgent:
             raise ValueError("GOOGLE_API_KEY non trouvée dans .env")
         
         genai.configure(api_key=api_key)
-        self.model = genai.GenerativeModel("gemini-2.0-flash-exp")
+        self.model = genai.GenerativeModel("gemini-2.5-flash")
         
         # Charger le prompt système
         self.system_prompt = self._load_system_prompt()
         
-        print("✅ Auditeur initialisé (Gemini 2.0 Flash)")
+        print("✅ Auditeur initialisé (Gemini 2.5 Flash)")
     
     def _load_system_prompt(self) -> str:
         """Charge le prompt système depuis le fichier"""
@@ -81,35 +81,32 @@ Sois précis et constructif."""
                 with open(file_path, 'r', encoding='utf-8') as f:
                     code_content = f.read()
                 
-                # 3. Analyse avec le LLM
-                user_prompt = f"""Analyse ce fichier Python et identifie tous les problèmes :
+                # 3. Analyse avec le LLM - PROMPT SIMPLIFIÉ
+                user_prompt = f"""Analyse ce fichier Python et identifie UNIQUEMENT les 3-5 problèmes les PLUS CRITIQUES.
 
 **Fichier** : {Path(file_path).name}
 
 **Code** :
 ```python
-{code_content[:2000]}  # Limiter à 2000 chars pour ne pas dépasser le contexte
+{code_content[:1500]}
 ```
 
-**Résultats Pylint** :
-Score : {pylint_score}/10
-Issues : {pylint_issues[:5]}  # Top 5 issues
+**Score Pylint** : {pylint_score}/10
 
-Fournis un plan de correction au format JSON :
+Fournis un plan JSON COMPACT (max 10 lignes) :
 {{
-    "file": "nom_fichier.py",
+    "file": "CHEMIN_COMPLET_DU_FICHIER",
     "issues": [
-        {{
-            "type": "bug|pep8|documentation|test",
-            "line": numéro_ligne,
-            "description": "Description du problème",
-            "priority": "HIGH|MEDIUM|LOW",
-            "suggestion": "Comment corriger"
-        }}
+        {{"type": "bug", "line": 1, "description": "Problème X", "priority": "HIGH", "suggestion": "Correction Y"}},
+        {{"type": "pep8", "line": 2, "description": "Problème Z", "priority": "MEDIUM", "suggestion": "Fix W"}}
     ]
 }}
 
-Réponds UNIQUEMENT avec le JSON, pas de texte avant/après."""
+IMPORTANT : 
+- Maximum 5 issues
+- Descriptions COURTES (max 50 caractères)
+- JSON valide UNIQUEMENT, RIEN d'autre
+- PAS de markdown ```json"""
                 
                 # Appel au LLM
                 response = self.model.generate_content(
@@ -119,11 +116,11 @@ Réponds UNIQUEMENT avec le JSON, pas de texte avant/après."""
                 # Log obligatoire
                 log_experiment(
                     agent_name="Auditor_Agent",
-                    model_used="gemini-2.0-flash-exp",
+                    model_used="gemini-2.5-flash",
                     action=ActionType.ANALYSIS,
                     details={
                         "file_analyzed": file_path,
-                        "input_prompt": user_prompt[:500],  # Tronquer pour les logs
+                        "input_prompt": user_prompt[:500],
                         "output_response": response.text[:500],
                         "pylint_score": pylint_score,
                         "code_length": len(code_content)
@@ -140,7 +137,29 @@ Réponds UNIQUEMENT avec le JSON, pas de texte avant/après."""
                     elif "```" in clean_response:
                         clean_response = clean_response.split("```")[1].split("```")[0]
                     
+                    # Parser le JSON
                     analysis = json.loads(clean_response)
+                    
+                    # IMPORTANT : Forcer le chemin complet du fichier
+                    analysis["file"] = file_path
+                    
+                    # Vérifier la structure
+                    if "issues" not in analysis:
+                        print(f"      ⚠️  JSON invalide - structure incorrecte")
+                        # Fallback basique
+                        analysis = {
+                            "file": file_path,
+                            "issues": [
+                                {
+                                    "type": "pylint",
+                                    "line": 1,
+                                    "description": f"Score Pylint: {pylint_score}/10",
+                                    "priority": "MEDIUM",
+                                    "suggestion": "Corriger violations PEP8"
+                                }
+                            ]
+                        }
+                    
                     all_issues.append(analysis)
                     
                     issues_count = len(analysis.get("issues", []))
@@ -148,25 +167,26 @@ Réponds UNIQUEMENT avec le JSON, pas de texte avant/après."""
                     
                 except json.JSONDecodeError as e:
                     print(f"      ⚠️  Erreur parsing JSON : {e}")
+                    print(f"      📄 Réponse brute : {response.text[:200]}...")
                     # Fallback : créer une structure basique
                     all_issues.append({
                         "file": file_path,
                         "issues": [
                             {
                                 "type": "pylint",
+                                "line": 1,
                                 "description": f"Score Pylint : {pylint_score}/10",
                                 "priority": "MEDIUM",
                                 "suggestion": "Corriger les violations Pylint"
                             }
-                        ],
-                        "raw_analysis": response.text
+                        ]
                     })
             
             except Exception as e:
                 print(f"      ❌ Erreur lors de l'analyse : {e}")
                 log_experiment(
                     agent_name="Auditor_Agent",
-                    model_used="gemini-2.0-flash-exp",
+                    model_used="gemini-2.5-flash",
                     action=ActionType.DEBUG,
                     details={
                         "file_analyzed": file_path,
