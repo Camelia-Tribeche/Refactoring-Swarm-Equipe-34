@@ -6,44 +6,42 @@ import subprocess
 import json
 from pathlib import Path
 from typing import Tuple, List, Dict
-
+import re
+import sys
 
 def run_pylint_on_file(file_path: str) -> Tuple[float, List[Dict]]:
-    """
-    Exécute pylint sur un fichier et retourne le score + les issues
-    
-    Args:
-        file_path: Chemin du fichier à analyser
-        
-    Returns:
-        Tuple (score, liste_issues)
-        - score: Note sur 10
-        - liste_issues: Liste des problèmes détectés
-    """
     path = Path(file_path)
     
     if not path.exists():
         return 0.0, [{"error": f"Fichier {file_path} introuvable"}]
     
     try:
-        # Exécuter pylint avec format JSON
+        # Appel PyLint pour récupérer le score (texte normal)
         result = subprocess.run(
-            ["pylint", str(path), "--output-format=json", "--score=yes"],
+            [sys.executable, "-m", "pylint", str(path)],
             capture_output=True,
             text=True,
             timeout=30
         )
+
+        # Score
+        report = result.stdout + "\n" + result.stderr
+        score = extract_score_from_output(report)
+        if score is None:
+            score = 0.0
         
-        # Parser les résultats JSON
+        # Appel séparé pour JSON si nécessaire (issues)
         try:
-            issues = json.loads(result.stdout)
-        except json.JSONDecodeError:
+            result_json = subprocess.run(
+                [sys.executable, "-m", "pylint", str(path), "--output-format=json"],
+                capture_output=True,
+                text=True,
+                timeout=30
+            )
+            issues = json.loads(result_json.stdout)
+        except Exception:
             issues = []
-        
-        # Extraire le score depuis stderr (où pylint écrit le score)
-        score = extract_score_from_output(result.stderr)
-        
-        # Formater les issues
+
         formatted_issues = [
             {
                 "type": issue.get("type", "unknown"),
@@ -57,39 +55,16 @@ def run_pylint_on_file(file_path: str) -> Tuple[float, List[Dict]]:
         ]
         
         return score, formatted_issues
-        
-    except subprocess.TimeoutExpired:
-        return 0.0, [{"error": "Timeout lors de l'exécution de pylint"}]
-    except FileNotFoundError:
-        return 0.0, [{"error": "Pylint n'est pas installé. Exécutez: pip install pylint"}]
+    
     except Exception as e:
         return 0.0, [{"error": f"Erreur pylint: {str(e)}"}]
 
 
-def extract_score_from_output(output: str) -> float:
-    """
-    Extrait le score depuis la sortie pylint
-    
-    Args:
-        output: Sortie texte de pylint
-        
-    Returns:
-        Score sur 10
-    """
-    try:
-        # Chercher la ligne contenant "rated at"
-        for line in output.split('\n'):
-            if 'rated at' in line.lower():
-                # Format: "Your code has been rated at 7.50/10"
-                parts = line.split('rated at')
-                if len(parts) > 1:
-                    score_part = parts[1].split('/')[0].strip()
-                    return float(score_part)
-    except:
-        pass
-    
-    # Score par défaut si extraction échoue
-    return 5.0
+def extract_score_from_output(report: str) -> float:
+    match = re.search(r"rated at (-?\d+(\.\d+)?)/10", report)
+    if match:
+        return float(match.group(1))
+    return None
 
 
 def run_pylint_on_directory(directory: str) -> Dict:
