@@ -106,7 +106,8 @@ IMPORTANT :
 - Maximum 5 issues
 - Descriptions COURTES (max 50 caractères)
 - JSON valide UNIQUEMENT, RIEN d'autre
-- PAS de markdown ```json"""
+- PAS de markdown ```json
+- TOUS les champs requis: type, line, description, priority, suggestion"""
                 
                 # Appel au LLM
                 response = self.model.generate_content(
@@ -142,6 +143,40 @@ IMPORTANT :
                     
                     # IMPORTANT : Forcer le chemin complet du fichier
                     analysis["file"] = file_path
+
+                    # VALIDATE: Ensure all issues have required fields - FIXED VERSION
+                    if "issues" in analysis:
+                        valid_issues = []
+                        for issue in analysis.get("issues", []):
+                            # CRITICAL FIX: Check for exact required field names
+                            required_fields = ["type", "line", "description", "priority", "suggestion"]
+                            has_all_fields = all(field in issue for field in required_fields)
+                            
+                            if has_all_fields:
+                                # Ensure types are correct
+                                try:
+                                    issue["line"] = int(issue["line"])
+                                    issue["priority"] = str(issue["priority"]).upper()
+                                    valid_issues.append(issue)
+                                except (ValueError, TypeError) as e:
+                                    print(f"      ⚠️  Skipping issue with invalid types: {issue}")
+                            else:
+                                # Show which fields are missing
+                                missing = [f for f in required_fields if f not in issue]
+                                print(f"      ⚠️  Skipping incomplete issue (missing: {missing}): {issue}")
+                        
+                        analysis["issues"] = valid_issues
+                        
+                        if not valid_issues:
+                            print(f"      ⚠️  No valid issues in LLM response, using fallback")
+                            analysis["issues"] = [{
+                                "type": "pylint",
+                                "line": 1,
+                                "description": f"Score Pylint: {pylint_score}/10",
+                                "priority": "MEDIUM",
+                                "suggestion": "Corriger violations PEP8"
+                            }]
+                    
                     
                     # Vérifier la structure
                     if "issues" not in analysis:
